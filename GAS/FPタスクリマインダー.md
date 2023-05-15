@@ -1,4 +1,3 @@
-```
 //スプレッドシートのメニューバーからリマインダーの確認/起動/停止ができるようにする
 function onOpen() {
   SpreadsheetApp.getActiveSpreadsheet().addMenu('リマインダー',[
@@ -37,12 +36,30 @@ function deleteAllTriggers(){
 
 //setTriggerを起動する
 function startSetTrigger(){
+  var triggers = ScriptApp.getProjectTriggers();
+  for (let i = 0; i < triggers.length; i++) {
+    var trigger = triggers[i];
+    if(trigger.getHandlerFunction() == "notifySlack"){
+      Browser.msgBox("リマインダーは起動中です");
+      return;
+    }
+  }
   setTrigger();
   Browser.msgBox("リマインダーを起動しました");
 }
 
 //次の日の8:30にnotifySlack関数を実行する
 function setTrigger(){
+  
+  //複数のトリガーが設定されてnotifySlackが２回以上呼び出されるのを防ぐために一度notifySlackを削除する
+  var triggers = ScriptApp.getProjectTriggers();
+  for (let i = 0; i < triggers.length; i++) {
+    var trigger = triggers[i];
+    if(trigger.getHandlerFunction() == "notifySlack"){
+      ScriptApp.deleteTrigger(trigger);
+    }
+  }
+  
   const time = new Date();
   time.setDate(time.getDate()+1);
   time.setHours(8);
@@ -50,33 +67,51 @@ function setTrigger(){
   ScriptApp.newTrigger('notifySlack').timeBased().at(time).create();
 };
 
-//Slackに送る
+//Slack送信
 function notifySlack() {
   
   //次の日の8:30に再びnotifySlackが実行されるようにセット
   setTrigger();
   
-  //getTasks関数を呼び出してタスクを取得する
-  var tasks = getTasks();
+  //入稿スケジュール、編集長タスクを取得 
+  var info = getInformation();
   
-  if(tasks.length !== 0){
-    var text = '【入稿前スケジュール】\n'
-    
-    //保護者版タスクが存在し、かつそれが高校生版タスクと異なる場合は分けて書く
-    if(tasks['task_parent'] && tasks['task_student'] !== tasks['task_parent']){
-      Logger.log("true")
-      text += '（高校生版）\n'+tasks['task_student']+'\n'+'（保護者版）\n'+tasks['task_parent']
-    }
-    //それ以外の場合は高校生版タスクのみ書く
-    else{
-      text += tasks['task_student']
+  var submit_schedule = info['submit_schedule'];
+  var edit_tasks = info['edit_tasks'];
+  
+  var text = '';
+
+  //入稿前スケジュールのテキスト
+  if(submit_schedule['student'] || submit_schedule['parent']){
+    text += '【入稿前スケジュール】\n';
+      
+    if(submit_schedule['student'] == submit_schedule['parent']){
+      text += submit_schedule['student']+'\n';
+    }else{
+      if(submit_schedule['student']){
+        text += '（高校生版）\n'+submit_schedule['student']+'\n';
+      };
+      if(submit_schedule['parent']){
+        text += '（保護者版）\n'+submit_schedule['parent']+'\n';
+      }; 
     };
+  };
     
-    //以下はSlack送信のための情報
+  //編集長タスクのテキスト
+  if(edit_tasks.length !== 0){
+      text += '【編集長タスク】\n';
+      edit_tasks.forEach(function(edit_task){
+        text += '・'+edit_task+'\n';
+      });
+  };
+  
+  //送信
+  if(text.length != 0){
+    var issue = SpreadsheetApp.getActiveSpreadsheet().getName().replace('フリーペーパー管理シート','');
+    
     var payload ={
       'username': '**',
-      'text': text,
-      'channel': '**'
+      'text': text
     };
     var options = {
       'method': 'post',
@@ -84,44 +119,82 @@ function notifySlack() {
       'payload': JSON.stringify(payload)
     };
     
-    var url = '**';
+    var url = 'webhook url';
     
-    //送信
     UrlFetchApp.fetch(url, options);
   };
 };
 
+
 //タスクを取得する
-function getTasks(){
+function getInformation(){
+  
+  var date = new Date();
+  var day = date.getDate();
+  var month = date.getMonth();
+  var year = date.getFullYear();
   
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sh_submit = ss.getSheetByName('入稿前スケジュール');
+
+  var submit_schedule = getSchedule(day,month,year,ss);
+  var edit_tasks = getTasks(day,month,year,ss);
   
+  var info = {'submit_schedule':submit_schedule,'edit_tasks':edit_tasks};
   
-  //実行日の日付を取得
-  var date = new Date();
-  var day = 3;//date.getDate();
-  var month = 11;date.getMonth();
-  
-  var last_row = sh_submit.getLastRow()
-  var task = {};
-  
-  //タスクの日付が書いてあるA列を順番に調べる
-  for(var i = 2; i <= last_row; i++){
-    var daterow = sh_submit.getRange(i,1).getValue();
-    
-    //もし関数の実行日とタスクの日付が一致した場合、D、E列の内容を取得する
-    if(daterow.getDate()==day && daterow.getMonth()==month){
-      
-      var task_student = sh_submit.getRange(i,4).getValue();
-      var task_parent = sh_submit.getRange(i,5).getValue(); 
-      
-      task["task_student"] = task_student;
-      task["task_parent"] = task_parent;
-      break;
-      
-    } 
-  }; 
-  return task;
+  return info;
 };
 
+//入稿前スケジュールを取得
+function getSchedule(day,month,year,ss){
+
+  var sh_submit = ss.getSheetByName('入稿前スケジュール');
+  var last_row_sub = sh_submit.getLastRow();
+  
+  for(var i = 2; i <= last_row_sub; i++){
+    var daterow1 = sh_submit.getRange(i,1).getValue();    
+    if(Object.prototype.toString.call(daterow1) == '[object Date]'){         
+      if(daterow1 != false && daterow1.getDate()==day && daterow1.getMonth()==month && daterow1.getFullYear()==year){
+        var schedule_student = sh_submit.getRange(i,4).getValue();
+        break;
+      }; 
+    };    
+  };
+  
+  for(var j = 2; j <= last_row_sub; j++){
+    var daterow2 = sh_submit.getRange(j,6).getValue();
+    if(Object.prototype.toString.call(daterow2) == '[object Date]'){    
+      if(daterow2 != false && daterow2.getDate()==day && daterow2.getMonth()==month && daterow2.getFullYear()==year){
+      var schedule_parent = sh_submit.getRange(j,9).getValue();
+      break;
+      }; 
+    };
+  };
+    
+  var schedule = {'student':schedule_student, 'parent':schedule_parent};
+  return schedule;
+}; 
+
+//編集長タスクを取得
+function getTasks(day,month,year,ss){
+  
+  var sh_edit = ss.getSheetByName('編集長タスク');
+  var last_row_edit = sh_edit.getLastRow();
+  var last_column_edit = sh_edit.getLastColumn();
+  
+  var tasks_edit = [];
+  
+  for(var i = 3; i<= last_column_edit; i++){
+    var datecolumn = sh_edit.getRange(2,i).getValue();
+    if(Object.prototype.toString.call(datecolumn) == '[object Date]'){
+      if(datecolumn.getDate() ==day && datecolumn.getMonth()==month && datecolumn.getFullYear()==year){
+        for(var j = 4; j <= last_row_edit; j++){
+          if(sh_edit.getRange(j,i).isBlank() == false){
+            tasks_edit.push(sh_edit.getRange(j,i).getValue());
+          }
+        }
+      break;
+      }
+    }
+  }; 
+  return tasks_edit;
+};
