@@ -1,3 +1,4 @@
+```
 //スプレッドシートのメニューバーからリマインダーの確認/起動/停止ができるようにする
 function onOpen() {
   SpreadsheetApp.getActiveSpreadsheet().addMenu('リマインダー',[
@@ -198,3 +199,4 @@ function getTasks(day,month,year,ss){
   }; 
   return tasks_edit;
 };
+```
